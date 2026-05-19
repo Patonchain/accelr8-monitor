@@ -17,6 +17,14 @@ test.afterAll(async () => {
 })
 
 async function scanPage(page: import("@playwright/test").Page, url: string, label: string, fileSlug: string): Promise<void> {
+  // joinaccelr8.com runs a per-word unscramble animation on heading load
+  // (and likely similar reveals elsewhere). Without an extra settle the
+  // first viewport screenshots catch text mid-scramble and the vision model
+  // reports false "garbled text" / "corrupted heading" findings. 2.5s lets
+  // those effects resolve while still being negligible against the cost
+  // of a vision call.
+  await page.waitForTimeout(2_500)
+
   const shots = await snapViewports(page, SCREENSHOT_DIR, fileSlug)
   for (let i = 0; i < shots.length; i++) {
     const verdict = await visionCheck(shots[i], `${label} (viewport ${i + 1} of ${shots.length})`)
