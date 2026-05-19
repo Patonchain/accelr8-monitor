@@ -37,15 +37,24 @@ async function signIn(page: import("@playwright/test").Page): Promise<{ ok: bool
 
   // Wait up to 15s either for navigation away from /login, or for an
   // error message to appear inline. We capture both states.
+  //
+  // count()/textContent() can throw "Execution context was destroyed" when
+  // the page is mid-navigation (Supabase signs in → redirect tears down the
+  // DOM mid-query). That's not a real failure — wrap in try/catch and let
+  // the URL check on the next tick confirm success.
   const start = Date.now()
   while (Date.now() - start < 15_000) {
     if (!page.url().includes("/login")) return { ok: true, reason: "signed in" }
-    const errEl = page.locator("text=/not allowlist|unauthor|invalid|error/i").first()
-    if (await errEl.count()) {
-      const text = (await errEl.textContent())?.trim() ?? "auth error"
-      const shot = path.join(SCREENSHOT_DIR, "signin-error.jpg")
-      await page.screenshot({ path: shot, type: "jpeg", quality: 75, fullPage: true })
-      return { ok: false, reason: text.slice(0, 200), shot }
+    try {
+      const errEl = page.locator("text=/not allowlist|unauthor|invalid|error/i").first()
+      if (await errEl.count()) {
+        const text = (await errEl.textContent())?.trim() ?? "auth error"
+        const shot = path.join(SCREENSHOT_DIR, "signin-error.jpg")
+        await page.screenshot({ path: shot, type: "jpeg", quality: 75, fullPage: true })
+        return { ok: false, reason: text.slice(0, 200), shot }
+      }
+    } catch {
+      // Navigation in progress — treat as transient, retry next tick.
     }
     await page.waitForTimeout(500)
   }
