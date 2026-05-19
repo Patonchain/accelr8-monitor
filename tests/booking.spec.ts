@@ -99,8 +99,14 @@ test("walk every room type through checkout", async ({ page, context }) => {
   }
 })
 
-async function runRoomFlow(page: Page, context: import("@playwright/test").BrowserContext, roomName: string): Promise<void> {
-  const slugName = roomName.replace(/[^a-z0-9]/gi, "_").toLowerCase()
+// Booking flow:
+//   modal → "Sign lease & reserve" → SignWell iframe (lease signing) → Stripe checkout.
+// The monitor verifies the modal opens with a usable CTA per room. Going
+// deeper (actually signing the lease + paying) is intentionally out of
+// scope today — that requires either SignWell test mode or a synthetic
+// lease-skip path, neither of which exist yet.
+async function runRoomFlow(page: Page, _context: import("@playwright/test").BrowserContext, roomName: string): Promise<void> {
+  const slugName = roomName.replace(/[^a-z0-9]/gi, "_").toLowerCase().slice(0, 40)
 
   await test.step(`room: ${roomName}`, async () => {
     // Reset to a clean slug page before each room so prior modals/scrolls don't interfere.
@@ -109,74 +115,94 @@ async function runRoomFlow(page: Page, context: import("@playwright/test").Brows
     const card = page.locator(`text="${roomName}"`).first()
     await card.scrollIntoViewIfNeeded()
     await card.click()
+    await page.waitForTimeout(1_000)
 
-    // Wait for the modal to mount; RoomModal renders the checkout CTA.
-    await page.waitForTimeout(800)
     const modalShot = await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-modal.jpg`))
     const modalVerdict = await visionCheck(modalShot, `book.joinaccelr8.com room modal: ${roomName}`)
     for (const issue of modalVerdict.issues) visionResults.push({ page: SLUG_URL, severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: modalShot })
 
-    const checkoutBtn = page
-      .locator("button:has-text('Checkout'), button:has-text('Reserve'), button:has-text('Book'), a:has-text('Checkout')")
-      .first()
-    if (!(await checkoutBtn.count())) {
+    // The CTA text varies by state (RoomModal.tsx):
+    //   "Sold out" | "Loading lease…" | "Set dates to continue" | "Sign lease & reserve"
+    // We want the active state. Match anything starting with "Sign lease" and
+    // require it to be enabled. If we see any other text, flag the state so the
+    // alert email tells Pat WHY this room isn't bookable.
+    const ctaSelector = "button:has-text('Sign lease'), button:has-text('Set dates'), button:has-text('Sold out'), button:has-text('Loading lease')"
+    const cta = page.locator(ctaSelector).first()
+
+    if (!(await cta.count())) {
       visionResults.push({
         page: SLUG_URL,
         severity: "error",
-        description: `[${roomName}] could not find a checkout/reserve/book button in modal`,
+        description: `[${roomName}] modal opened but no recognizable CTA button found`,
         screenshot: modalShot,
       })
       return
     }
 
-    // Stripe Checkout opens in the same tab on book.joinaccelr8.com. Catch a
-    // new-tab opening too in case that flips.
-    const newPagePromise = context.waitForEvent("page", { timeout: 5_000 }).catch(() => null)
-    await checkoutBtn.click()
-    const stripePage = (await newPagePromise) ?? page
+    const ctaText = ((await cta.textContent()) ?? "").trim()
+    const isDisabled = await cta.isDisabled()
 
-    try {
-      await stripePage.waitForURL(/checkout\.stripe\.com/, { timeout: 25_000 })
-    } catch {
-      const shot = await snap(stripePage, path.join(SCREENSHOT_DIR, `room-${slugName}-no-stripe.jpg`))
+    if (ctaText.startsWith("Sold out")) {
       visionResults.push({
-        page: stripePage.url(),
+        page: SLUG_URL,
+        severity: "warning",
+        description: `[${roomName}] is marked sold out (CTA: "${ctaText}")`,
+        screenshot: modalShot,
+      })
+      return
+    }
+    if (ctaText.startsWith("Set dates")) {
+      visionResults.push({
+        page: SLUG_URL,
         severity: "error",
-        description: `[${roomName}] checkout click did not lead to Stripe within 25s`,
-        screenshot: shot,
+        description: `[${roomName}] CTA shows "${ctaText}" but the monitor slug should have proposedDates pre-filled — booking config drift`,
+        screenshot: modalShot,
+      })
+      return
+    }
+    if (isDisabled) {
+      visionResults.push({
+        page: SLUG_URL,
+        severity: "error",
+        description: `[${roomName}] CTA "${ctaText}" is disabled in modal`,
+        screenshot: modalShot,
       })
       return
     }
 
-    const stripeShot = await snap(stripePage, path.join(SCREENSHOT_DIR, `room-${slugName}-stripe.jpg`))
-    const stripeVerdict = await visionCheck(stripeShot, `Stripe checkout for ${roomName}`)
-    for (const issue of stripeVerdict.issues) visionResults.push({ page: stripePage.url(), severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: stripeShot })
-
-    if (!COMPLETE_CHECKOUT) return
-
-    // Fill the test card and submit. Only safe against sk_test_* deployments.
-    await stripePage.fill("input[name='cardNumber']", "4242 4242 4242 4242")
-    await stripePage.fill("input[name='cardExpiry']", "12 / 32")
-    await stripePage.fill("input[name='cardCvc']", "123")
-    await stripePage.fill("input[name='billingName']", "Monitor Test")
-    await stripePage.fill("input[name='billingPostalCode']", "94110")
-    await stripePage.locator("button[type='submit']").click()
-
-    try {
-      await stripePage.waitForURL((url) => !url.toString().includes("checkout.stripe.com"), { timeout: 60_000 })
-    } catch {
-      const shot = await snap(stripePage, path.join(SCREENSHOT_DIR, `room-${slugName}-card-fail.jpg`))
+    // Click the active "Sign lease & reserve" CTA. SignWell overlay should mount.
+    await cta.click({ timeout: 5_000 }).catch(async (e) => {
       visionResults.push({
-        page: stripePage.url(),
+        page: SLUG_URL,
         severity: "error",
-        description: `[${roomName}] test card submission did not redirect to success within 60s`,
-        screenshot: shot,
+        description: `[${roomName}] click failed: ${(e as Error).message.slice(0, 120)}`,
+        screenshot: modalShot,
+      })
+      throw e
+    })
+
+    // Wait for either the SignWell iframe to mount OR a "Loading lease…"
+    // state to clear. signwell.com is the iframe origin.
+    let signwellOk = false
+    try {
+      await page.waitForSelector("iframe[src*='signwell.com'], iframe[title*='SignWell' i]", { timeout: 30_000 })
+      signwellOk = true
+    } catch {
+      // iframe didn't appear — capture whatever state we're in.
+    }
+
+    const afterShot = await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-after-click.jpg`))
+    if (!signwellOk) {
+      visionResults.push({
+        page: page.url(),
+        severity: "error",
+        description: `[${roomName}] SignWell lease iframe did not mount within 30s after clicking "${ctaText}"`,
+        screenshot: afterShot,
       })
       return
     }
 
-    const successShot = await snap(stripePage, path.join(SCREENSHOT_DIR, `room-${slugName}-success.jpg`))
-    const successVerdict = await visionCheck(successShot, `post-checkout success for ${roomName}`)
-    for (const issue of successVerdict.issues) visionResults.push({ page: stripePage.url(), severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: successShot })
+    const verdict = await visionCheck(afterShot, `lease overlay for ${roomName}`)
+    for (const issue of verdict.issues) visionResults.push({ page: page.url(), severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: afterShot })
   })
 }
