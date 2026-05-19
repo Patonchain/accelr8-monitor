@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
-import { snap } from "../lib/shot.js"
+import { snap, snapViewports } from "../lib/shot.js"
 
 const BASE_URL = process.env.CRM_URL ?? "https://accelr8-crm.vercel.app"
 const EMAIL = process.env.CRM_MONITOR_EMAIL ?? "monitor@joinaccelr8.com"
@@ -74,13 +74,17 @@ for (const gp of GATED_PAGES) {
     const signin = await signIn(page)
     test.skip(!signin.ok, `signin failed: ${signin.reason}`)
 
+    test.setTimeout(4 * 60_000)
     const response = await page.goto(`${BASE_URL}${gp}`, { waitUntil: "networkidle" })
     expect(response?.ok(), `HTTP ${response?.status()} on ${gp}`).toBe(true)
 
     const slug = gp.replace(/[^a-z0-9]/gi, "_") || "root"
-    const shot = await snap(page, path.join(SCREENSHOT_DIR, `${slug}.jpg`))
-    const verdict = await visionCheck(shot, `CRM ${gp}`)
-    for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}${gp}`, severity: issue.severity, description: issue.description, screenshot: shot })
-    expect(verdict.issues.filter((i) => i.severity === "error"), `vision errors on ${gp}`).toHaveLength(0)
+    const shots = await snapViewports(page, SCREENSHOT_DIR, slug)
+    const errsBefore = visionResults.filter((v) => v.severity === "error").length
+    for (let i = 0; i < shots.length; i++) {
+      const verdict = await visionCheck(shots[i], `CRM ${gp} (viewport ${i + 1} of ${shots.length})`)
+      for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}${gp}#vp${i + 1}`, severity: issue.severity, description: `[vp ${i + 1}/${shots.length}] ${issue.description}`, screenshot: shots[i] })
+    }
+    expect(visionResults.filter((v) => v.severity === "error").length, `vision errors on ${gp}`).toBe(errsBefore)
   })
 }

@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
-import { snap } from "../lib/shot.js"
+import { snap, snapViewports } from "../lib/shot.js"
 
 // The booking site is slug-gated: each resident gets a personal URL.
 // `BOOKING_SLUG` should point at a synthetic test row that exists for
@@ -38,18 +38,17 @@ test("root URL renders the 'personal link required' gate", async ({ page }) => {
 
 test("slug page renders the rooms list", async ({ page }) => {
   test.skip(!SLUG_URL, "BOOKING_SLUG not set")
+  test.setTimeout(4 * 60_000)
   const response = await page.goto(SLUG_URL, { waitUntil: "networkidle" })
   expect(response?.ok(), `HTTP ${response?.status()} on ${SLUG_URL}`).toBe(true)
 
-  // Force any lazy-loaded room cards to mount.
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-  await page.waitForTimeout(800)
-  await page.evaluate(() => window.scrollTo(0, 0))
-
-  const shot = await snap(page, path.join(SCREENSHOT_DIR, "slug-rooms.jpg"))
-  const verdict = await visionCheck(shot, `book.joinaccelr8.com/${SLUG} rooms list`)
-  for (const issue of verdict.issues) visionResults.push({ page: SLUG_URL, severity: issue.severity, description: issue.description, screenshot: shot })
-  expect(verdict.issues.filter((i) => i.severity === "error")).toHaveLength(0)
+  const shots = await snapViewports(page, SCREENSHOT_DIR, "slug-rooms")
+  const errsBefore = visionResults.filter((v) => v.severity === "error").length
+  for (let i = 0; i < shots.length; i++) {
+    const verdict = await visionCheck(shots[i], `book.joinaccelr8.com/${SLUG} rooms (viewport ${i + 1} of ${shots.length})`)
+    for (const issue of verdict.issues) visionResults.push({ page: `${SLUG_URL}#vp${i + 1}`, severity: issue.severity, description: `[vp ${i + 1}/${shots.length}] ${issue.description}`, screenshot: shots[i] })
+  }
+  expect(visionResults.filter((v) => v.severity === "error").length).toBe(errsBefore)
 })
 
 // Each room card on the slug page → open the modal → click checkout → expect

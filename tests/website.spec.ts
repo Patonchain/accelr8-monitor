@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
-import { snap } from "../lib/shot.js"
+import { snapViewports } from "../lib/shot.js"
 
 const BASE_URL = process.env.WEBSITE_URL ?? "https://joinaccelr8.com"
 const SCREENSHOT_DIR = "results/screenshots/website"
@@ -16,19 +16,33 @@ test.afterAll(async () => {
   await fs.writeFile("results/website-vision.json", JSON.stringify(visionResults, null, 2))
 })
 
+async function scanPage(page: import("@playwright/test").Page, url: string, label: string, fileSlug: string): Promise<void> {
+  const shots = await snapViewports(page, SCREENSHOT_DIR, fileSlug)
+  for (let i = 0; i < shots.length; i++) {
+    const verdict = await visionCheck(shots[i], `${label} (viewport ${i + 1} of ${shots.length})`)
+    for (const issue of verdict.issues) {
+      visionResults.push({
+        page: `${url}#vp${i + 1}`,
+        severity: issue.severity,
+        description: `[vp ${i + 1}/${shots.length}] ${issue.description}`,
+        screenshot: shots[i],
+      })
+    }
+  }
+}
+
 test("home page loads and renders", async ({ page }) => {
+  test.setTimeout(4 * 60_000)
   const response = await page.goto(BASE_URL, { waitUntil: "networkidle" })
   expect(response?.ok(), `HTTP ${response?.status()} on ${BASE_URL}`).toBe(true)
+  await scanPage(page, BASE_URL, "joinaccelr8.com home", "home")
 
-  const shot = await snap(page, path.join(SCREENSHOT_DIR, "home.jpg"))
-  const verdict = await visionCheck(shot, "joinaccelr8.com homepage")
-  for (const issue of verdict.issues) {
-    visionResults.push({ page: BASE_URL, severity: issue.severity, description: issue.description, screenshot: shot })
-  }
-  expect(verdict.issues.filter((i) => i.severity === "error"), "vision-flagged errors on home").toHaveLength(0)
+  const errs = visionResults.filter((v) => v.page.startsWith(BASE_URL) && v.severity === "error")
+  expect(errs.map((e) => e.description), "vision-flagged errors on home").toHaveLength(0)
 })
 
 test("crawl and screenshot every internal page", async ({ page }) => {
+  test.setTimeout(15 * 60_000)
   await page.goto(BASE_URL, { waitUntil: "networkidle" })
   const origin = new URL(BASE_URL).origin
   const hrefs = await page.$$eval("a[href]", (els, origin) =>
@@ -46,14 +60,8 @@ test("crawl and screenshot every internal page", async ({ page }) => {
     await test.step(url, async () => {
       const response = await page.goto(url, { waitUntil: "networkidle" })
       expect(response?.ok(), `HTTP ${response?.status()} on ${url}`).toBe(true)
-
       const slug = url.replace(origin, "").replace(/[^a-z0-9]/gi, "_") || "root"
-      const shot = await snap(page, path.join(SCREENSHOT_DIR, `${slug}.jpg`))
-
-      const verdict = await visionCheck(shot, `joinaccelr8.com${new URL(url).pathname}`)
-      for (const issue of verdict.issues) {
-        visionResults.push({ page: url, severity: issue.severity, description: issue.description, screenshot: shot })
-      }
+      await scanPage(page, url, `joinaccelr8.com${new URL(url).pathname}`, slug)
     })
   }
 })
