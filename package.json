@@ -15,7 +15,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.69.0",
     "@playwright/test": "1.49.1",
-    "resend": "4.0.1"
+    "resend": "4.0.1",
+    "sharp": "0.34.2"
   },
   "devDependencies": {
     "@types/node": "22.10.5",

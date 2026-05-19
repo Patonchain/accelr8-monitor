@@ -22,6 +22,8 @@ jobs:
       CRM_MONITOR_PASSWORD: ${{ secrets.CRM_MONITOR_PASSWORD }}
       STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
       STRIPE_TEST_PUBLISHABLE_KEY: ${{ secrets.STRIPE_TEST_PUBLISHABLE_KEY }}
+      BOOKING_SLUG: ${{ secrets.BOOKING_SLUG }}
+      COMPLETE_STRIPE_CHECKOUT: ${{ secrets.COMPLETE_STRIPE_CHECKOUT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

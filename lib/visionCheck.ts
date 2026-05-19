@@ -1,5 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk"
 import fs from "node:fs/promises"
+import sharp from "sharp"
+
+// Anthropic vision rejects images with any dimension > 8000px.
+// CRM long-list pages (/queue, /tickets) can be 20k+ pixels tall.
+const MAX_DIM = 7800
+
+async function fitForVision(path: string): Promise<Buffer> {
+  const img = sharp(path)
+  const meta = await img.metadata()
+  if ((meta.width ?? 0) <= MAX_DIM && (meta.height ?? 0) <= MAX_DIM) {
+    return await img.toBuffer()
+  }
+  return await img.resize({ width: MAX_DIM, height: MAX_DIM, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer()
+}
 
 const VISION_ENABLED = Boolean(process.env.ANTHROPIC_API_KEY)
 const anthropic = VISION_ENABLED ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null
@@ -44,10 +58,14 @@ export async function visionCheck(
   if (!anthropic) {
     return { ok: true, issues: [], rawResponse: "(vision disabled — no ANTHROPIC_API_KEY)" }
   }
-  const data = await fs.readFile(screenshotPath)
+  const data = await fitForVision(screenshotPath)
   const base64 = data.toString("base64")
 
-  const mediaType: "image/jpeg" | "image/png" = screenshotPath.endsWith(".jpg") || screenshotPath.endsWith(".jpeg") ? "image/jpeg" : "image/png"
+  // After fitForVision we always have a JPEG byte stream when resizing
+  // happened, and original bytes (whatever they were) otherwise. Default
+  // to jpeg media type which sharp produced; only honor PNG if untouched.
+  const isPng = screenshotPath.endsWith(".png")
+  const mediaType: "image/jpeg" | "image/png" = isPng ? "image/png" : "image/jpeg"
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 1024,
