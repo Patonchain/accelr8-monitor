@@ -13,8 +13,8 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-      ALERT_TO_EMAIL: pat@joinaccelr8.com
-      ALERT_FROM_EMAIL: Accelr8 Monitor <monitor@joinaccelr8.com>
+      ALERT_TO_EMAIL: "pat@joinaccelr8.com"
+      ALERT_FROM_EMAIL: "Accelr8 Monitor <monitor@joinaccelr8.com>"
       WEBSITE_URL: https://joinaccelr8.com
       BOOKING_URL: https://book.joinaccelr8.com
       CRM_URL: https://accelr8-crm.vercel.app
