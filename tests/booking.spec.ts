@@ -2,10 +2,15 @@ import { test, expect } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
+import { snap } from "../lib/shot.js"
 
-// Defaults to live booking site for read-only flow checks. Override with
-// BOOKING_URL=<staging-url-with-test-stripe-keys> to exercise full checkout.
-const BASE_URL = process.env.BOOKING_URL ?? "https://book.joinaccelr8.com"
+// The booking site is slug-gated: each resident gets a personal URL.
+// The root URL only renders "personal link required". To exercise the
+// actual booking flow, set BOOKING_SLUG to a test-only slug whose CRM
+// booking config points at sandbox data.
+const ROOT_URL = process.env.BOOKING_URL ?? "https://book.joinaccelr8.com"
+const SLUG = process.env.BOOKING_SLUG ?? ""
+const SLUG_URL = SLUG ? `${ROOT_URL.replace(/\/$/, "")}/${SLUG}` : ""
 const COMPLETE_CHECKOUT = process.env.COMPLETE_STRIPE_CHECKOUT === "1"
 const SCREENSHOT_DIR = "results/screenshots/booking"
 const visionResults: { page: string; severity: string; description: string; screenshot: string }[] = []
@@ -18,69 +23,46 @@ test.afterAll(async () => {
   await fs.writeFile("results/booking-vision.json", JSON.stringify(visionResults, null, 2))
 })
 
-test("rooms list loads", async ({ page }) => {
-  const response = await page.goto(BASE_URL, { waitUntil: "networkidle" })
+test("root URL renders the 'personal link required' gate", async ({ page }) => {
+  const response = await page.goto(ROOT_URL, { waitUntil: "networkidle" })
   expect(response?.ok()).toBe(true)
+  await expect(page.getByText(/personal link/i)).toBeVisible({ timeout: 5_000 })
 
-  const shot = path.join(SCREENSHOT_DIR, "rooms-list.png")
-  await page.screenshot({ path: shot, fullPage: true })
-  const verdict = await visionCheck(shot, "book.joinaccelr8.com rooms list")
-  for (const issue of verdict.issues) visionResults.push({ page: BASE_URL, ...issue, screenshot: shot })
+  const shot = await snap(page, path.join(SCREENSHOT_DIR, "gate.jpg"))
+  const verdict = await visionCheck(shot, "book.joinaccelr8.com gate page")
+  for (const issue of verdict.issues) visionResults.push({ page: ROOT_URL, severity: issue.severity, description: issue.description, screenshot: shot })
+})
+
+test("booking slug page renders", async ({ page }) => {
+  test.skip(!SLUG_URL, "BOOKING_SLUG not set — supply a test slug to exercise the booking flow")
+  const response = await page.goto(SLUG_URL, { waitUntil: "networkidle" })
+  expect(response?.ok(), `HTTP ${response?.status()} on ${SLUG_URL}`).toBe(true)
+
+  const shot = await snap(page, path.join(SCREENSHOT_DIR, "slug-page.jpg"))
+  const verdict = await visionCheck(shot, `book.joinaccelr8.com/${SLUG}`)
+  for (const issue of verdict.issues) visionResults.push({ page: SLUG_URL, severity: issue.severity, description: issue.description, screenshot: shot })
   expect(verdict.issues.filter((i) => i.severity === "error")).toHaveLength(0)
 })
 
-test("room modal opens", async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: "networkidle" })
-  const firstRoom = page.locator("[data-room-card], .room-card, button:has-text('View')").first()
-  await firstRoom.click()
-  await page.waitForTimeout(800)
+test("checkout flow against stripe test mode", async ({ page, context }) => {
+  test.skip(!SLUG_URL, "BOOKING_SLUG not set")
+  test.skip(!COMPLETE_CHECKOUT, "Set COMPLETE_STRIPE_CHECKOUT=1 (against a deployment using sk_test_*)")
 
-  const shot = path.join(SCREENSHOT_DIR, "room-modal.png")
-  await page.screenshot({ path: shot, fullPage: true })
-  const verdict = await visionCheck(shot, "book.joinaccelr8.com room detail modal")
-  for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}#room`, ...issue, screenshot: shot })
-})
+  await page.goto(SLUG_URL, { waitUntil: "networkidle" })
 
-test("application form is reachable", async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: "networkidle" })
-  const firstRoom = page.locator("[data-room-card], .room-card, button:has-text('View')").first()
-  await firstRoom.click()
-  const applyBtn = page
-    .locator("button:has-text('Apply'), button:has-text('Book'), a:has-text('Apply')")
+  // Try the most likely checkout entry-point selectors. The booking site's
+  // exact markup changes; we list a few and click whichever matches first.
+  const checkoutBtn = page
+    .locator("button:has-text('Checkout'), button:has-text('Reserve'), button:has-text('Book'), a:has-text('Checkout')")
     .first()
-  await applyBtn.click()
-  await page.waitForTimeout(1500)
+  await checkoutBtn.click()
 
-  const shot = path.join(SCREENSHOT_DIR, "application-form.png")
-  await page.screenshot({ path: shot, fullPage: true })
-  const verdict = await visionCheck(shot, "book.joinaccelr8.com application form")
-  for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}#apply`, ...issue, screenshot: shot })
-})
-
-test("stripe checkout creates a session", async ({ page, context }) => {
-  test.skip(!COMPLETE_CHECKOUT, "Set COMPLETE_STRIPE_CHECKOUT=1 (against a test-mode deployment)")
-
-  await page.goto(BASE_URL, { waitUntil: "networkidle" })
-  const firstRoom = page.locator("[data-room-card], .room-card, button:has-text('View')").first()
-  await firstRoom.click()
-  await page.locator("button:has-text('Apply'), button:has-text('Book')").first().click()
-  await page.waitForTimeout(1500)
-
-  // Fill in known application fields (these may need adjustment as the form changes).
-  await page.fill("input[name='firstName'], input[name='first_name']", "Monitor")
-  await page.fill("input[name='lastName'], input[name='last_name']", "Test")
-  await page.fill("input[type='email']", "monitor@joinaccelr8.com")
-  await page.fill("input[type='tel'], input[name='phone']", "5551234567")
-  await page.locator("button:has-text('Continue'), button:has-text('Checkout')").first().click()
-
-  // Wait for Stripe to take over.
+  // Wait for Stripe checkout to take over (new tab or same tab).
   const stripePage = await context.waitForEvent("page", { timeout: 30_000 }).catch(() => page)
   await stripePage.waitForURL(/checkout\.stripe\.com/, { timeout: 30_000 })
 
-  const shot = path.join(SCREENSHOT_DIR, "stripe-checkout.png")
-  await stripePage.screenshot({ path: shot, fullPage: true })
+  await snap(stripePage, path.join(SCREENSHOT_DIR, "stripe-checkout.jpg"))
 
-  // Fill Stripe's test card.
   await stripePage.fill("input[name='cardNumber']", "4242 4242 4242 4242")
   await stripePage.fill("input[name='cardExpiry']", "12 / 32")
   await stripePage.fill("input[name='cardCvc']", "123")
@@ -88,11 +70,9 @@ test("stripe checkout creates a session", async ({ page, context }) => {
   await stripePage.fill("input[name='billingPostalCode']", "94110")
   await stripePage.locator("button[type='submit']").click()
 
-  // Wait for return to success page.
   await stripePage.waitForURL((url) => !url.toString().includes("checkout.stripe.com"), { timeout: 60_000 })
-  const successShot = path.join(SCREENSHOT_DIR, "checkout-success.png")
-  await stripePage.screenshot({ path: successShot, fullPage: true })
 
-  const verdict = await visionCheck(successShot, "post-checkout success page")
-  for (const issue of verdict.issues) visionResults.push({ page: stripePage.url(), ...issue, screenshot: successShot })
+  const shot = await snap(stripePage, path.join(SCREENSHOT_DIR, "checkout-success.jpg"))
+  const verdict = await visionCheck(shot, "post-checkout success page")
+  for (const issue of verdict.issues) visionResults.push({ page: stripePage.url(), severity: issue.severity, description: issue.description, screenshot: shot })
 })

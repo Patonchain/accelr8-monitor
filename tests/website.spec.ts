@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
+import { snap } from "../lib/shot.js"
 
 const BASE_URL = process.env.WEBSITE_URL ?? "https://joinaccelr8.com"
 const SCREENSHOT_DIR = "results/screenshots/website"
@@ -19,9 +20,7 @@ test("home page loads and renders", async ({ page }) => {
   const response = await page.goto(BASE_URL, { waitUntil: "networkidle" })
   expect(response?.ok(), `HTTP ${response?.status()} on ${BASE_URL}`).toBe(true)
 
-  const shot = path.join(SCREENSHOT_DIR, "home.png")
-  await page.screenshot({ path: shot, fullPage: true })
-
+  const shot = await snap(page, path.join(SCREENSHOT_DIR, "home.jpg"))
   const verdict = await visionCheck(shot, "joinaccelr8.com homepage")
   for (const issue of verdict.issues) {
     visionResults.push({ page: BASE_URL, severity: issue.severity, description: issue.description, screenshot: shot })
@@ -49,8 +48,7 @@ test("crawl and screenshot every internal page", async ({ page }) => {
       expect(response?.ok(), `HTTP ${response?.status()} on ${url}`).toBe(true)
 
       const slug = url.replace(origin, "").replace(/[^a-z0-9]/gi, "_") || "root"
-      const shot = path.join(SCREENSHOT_DIR, `${slug}.png`)
-      await page.screenshot({ path: shot, fullPage: true })
+      const shot = await snap(page, path.join(SCREENSHOT_DIR, `${slug}.jpg`))
 
       const verdict = await visionCheck(shot, `joinaccelr8.com${new URL(url).pathname}`)
       for (const issue of verdict.issues) {

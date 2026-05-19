@@ -15,7 +15,7 @@ export default defineConfig({
   outputDir: "results/artifacts",
   use: {
     viewport: { width: 1440, height: 900 },
-    screenshot: "on",
+    screenshot: { mode: "on", fullPage: false },
     video: "off",
     trace: "retain-on-failure",
     actionTimeout: 15_000,

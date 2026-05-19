@@ -47,6 +47,7 @@ export async function visionCheck(
   const data = await fs.readFile(screenshotPath)
   const base64 = data.toString("base64")
 
+  const mediaType: "image/jpeg" | "image/png" = screenshotPath.endsWith(".jpg") || screenshotPath.endsWith(".jpeg") ? "image/jpeg" : "image/png"
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 1024,
@@ -57,7 +58,7 @@ export async function visionCheck(
         content: [
           {
             type: "image",
-            source: { type: "base64", media_type: "image/png", data: base64 },
+            source: { type: "base64", media_type: mediaType, data: base64 },
           },
           { type: "text", text: `Page: ${pageLabel}\n\nReturn the JSON verdict.` },
         ],

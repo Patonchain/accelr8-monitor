@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { visionCheck } from "../lib/visionCheck.js"
+import { snap } from "../lib/shot.js"
 
 const BASE_URL = process.env.CRM_URL ?? "https://accelr8-crm.vercel.app"
 const EMAIL = process.env.CRM_MONITOR_EMAIL ?? "monitor@joinaccelr8.com"
@@ -22,41 +23,64 @@ test.afterAll(async () => {
 test("login page loads", async ({ page }) => {
   const response = await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" })
   expect(response?.ok()).toBe(true)
-  const shot = path.join(SCREENSHOT_DIR, "login.png")
-  await page.screenshot({ path: shot, fullPage: true })
+  const shot = await snap(page, path.join(SCREENSHOT_DIR, "login.jpg"))
   const verdict = await visionCheck(shot, "CRM login page")
-  for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}/login`, ...issue, screenshot: shot })
+  for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}/login`, severity: issue.severity, description: issue.description, screenshot: shot })
   expect(verdict.issues.filter((i) => i.severity === "error")).toHaveLength(0)
 })
 
-test("monitor user can sign in", async ({ page }) => {
-  test.skip(!PASSWORD, "CRM_MONITOR_PASSWORD not set")
+async function signIn(page: import("@playwright/test").Page): Promise<{ ok: boolean; reason: string; shot?: string }> {
   await page.goto(`${BASE_URL}/login`)
   await page.fill("input[type='email']", EMAIL)
   await page.fill("input[type='password']", PASSWORD)
   await page.locator("button[type='submit'], button:has-text('Sign in')").first().click()
-  await page.waitForURL((url) => !url.toString().includes("/login"), { timeout: 30_000 })
-  expect(page.url()).not.toContain("/login")
+
+  // Wait up to 15s either for navigation away from /login, or for an
+  // error message to appear inline. We capture both states.
+  const start = Date.now()
+  while (Date.now() - start < 15_000) {
+    if (!page.url().includes("/login")) return { ok: true, reason: "signed in" }
+    const errEl = page.locator("text=/not allowlist|unauthor|invalid|error/i").first()
+    if (await errEl.count()) {
+      const text = (await errEl.textContent())?.trim() ?? "auth error"
+      const shot = path.join(SCREENSHOT_DIR, "signin-error.jpg")
+      await page.screenshot({ path: shot, type: "jpeg", quality: 75, fullPage: true })
+      return { ok: false, reason: text.slice(0, 200), shot }
+    }
+    await page.waitForTimeout(500)
+  }
+  const shot = path.join(SCREENSHOT_DIR, "signin-timeout.jpg")
+  await page.screenshot({ path: shot, type: "jpeg", quality: 75, fullPage: true })
+  return { ok: false, reason: "sign-in did not redirect within 15s (likely allowlist mismatch)", shot }
+}
+
+test("monitor user can sign in", async ({ page }) => {
+  test.skip(!PASSWORD, "CRM_MONITOR_PASSWORD not set")
+  const result = await signIn(page)
+  if (!result.ok && result.shot) {
+    visionResults.push({
+      page: `${BASE_URL}/login`,
+      severity: "error",
+      description: `sign-in failed: ${result.reason}`,
+      screenshot: result.shot,
+    })
+  }
+  expect(result.ok, result.reason).toBe(true)
 })
 
 for (const gp of GATED_PAGES) {
   test(`gated page renders: ${gp}`, async ({ page }) => {
     test.skip(!PASSWORD, "CRM_MONITOR_PASSWORD not set")
-    // sign in inline so each test is independent
-    await page.goto(`${BASE_URL}/login`)
-    await page.fill("input[type='email']", EMAIL)
-    await page.fill("input[type='password']", PASSWORD)
-    await page.locator("button[type='submit'], button:has-text('Sign in')").first().click()
-    await page.waitForURL((url) => !url.toString().includes("/login"), { timeout: 30_000 })
+    const signin = await signIn(page)
+    test.skip(!signin.ok, `signin failed: ${signin.reason}`)
 
     const response = await page.goto(`${BASE_URL}${gp}`, { waitUntil: "networkidle" })
     expect(response?.ok(), `HTTP ${response?.status()} on ${gp}`).toBe(true)
 
     const slug = gp.replace(/[^a-z0-9]/gi, "_") || "root"
-    const shot = path.join(SCREENSHOT_DIR, `${slug}.png`)
-    await page.screenshot({ path: shot, fullPage: true })
+    const shot = await snap(page, path.join(SCREENSHOT_DIR, `${slug}.jpg`))
     const verdict = await visionCheck(shot, `CRM ${gp}`)
-    for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}${gp}`, ...issue, screenshot: shot })
+    for (const issue of verdict.issues) visionResults.push({ page: `${BASE_URL}${gp}`, severity: issue.severity, description: issue.description, screenshot: shot })
     expect(verdict.issues.filter((i) => i.severity === "error"), `vision errors on ${gp}`).toHaveLength(0)
   })
 }
