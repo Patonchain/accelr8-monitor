@@ -140,15 +140,13 @@ async function runRoomFlow(page: Page, _context: import("@playwright/test").Brow
 
     // The CTA text varies by state (RoomModal.tsx):
     //   "Sold out" | "Loading lease…" | "Set dates to continue" | "Sign lease & reserve"
-    // Wait explicitly for one of them to mount; busy state can stick for
-    // a few seconds while pricing loads.
-    let cta
+    // The button lives inside the right panel's overflow-y-auto container, so
+    // it's frequently in the DOM but below the fold. Use state: "attached"
+    // (not the default "visible") so we find it regardless, then scroll into
+    // view before clicking.
+    const cta = page.locator("button:text-matches('(Sign lease|Set dates|Sold out|Loading lease)', 'i')").first()
     try {
-      await page.waitForSelector(
-        "button:text-matches('(Sign lease|Set dates|Sold out|Loading lease)', 'i')",
-        { timeout: 10_000 },
-      )
-      cta = page.locator("button:text-matches('(Sign lease|Set dates|Sold out|Loading lease)', 'i')").first()
+      await cta.waitFor({ state: "attached", timeout: 10_000 })
     } catch {
       visionResults.push({
         page: SLUG_URL,
