@@ -110,8 +110,9 @@ function renderHtml(opts: {
   </div>`
 }
 
-function escape(s: string): string {
-  return s
+function escape(s: string | undefined | null): string {
+  if (s == null) return ""
+  return String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
