@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk"
 import fs from "node:fs/promises"
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const VISION_ENABLED = Boolean(process.env.ANTHROPIC_API_KEY)
+const anthropic = VISION_ENABLED ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null
 
 export interface VisionIssue {
   severity: "error" | "warning"
@@ -40,6 +41,9 @@ export async function visionCheck(
   screenshotPath: string,
   pageLabel: string,
 ): Promise<VisionResult> {
+  if (!anthropic) {
+    return { ok: true, issues: [], rawResponse: "(vision disabled — no ANTHROPIC_API_KEY)" }
+  }
   const data = await fs.readFile(screenshotPath)
   const base64 = data.toString("base64")
 
