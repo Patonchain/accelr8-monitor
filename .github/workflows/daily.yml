@@ -1,0 +1,46 @@
+name: Daily Monitor
+
+on:
+  schedule:
+    # 09:07 UTC daily (02:07 PST). Off-the-hour to dodge cron contention.
+    - cron: "7 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      ALERT_TO_EMAIL: pat@joinaccelr8.com
+      ALERT_FROM_EMAIL: Accelr8 Monitor <monitor@joinaccelr8.com>
+      WEBSITE_URL: https://joinaccelr8.com
+      BOOKING_URL: https://book.joinaccelr8.com
+      CRM_URL: https://accelr8-crm.vercel.app
+      CRM_MONITOR_EMAIL: monitor@joinaccelr8.com
+      CRM_MONITOR_PASSWORD: ${{ secrets.CRM_MONITOR_PASSWORD }}
+      STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+      STRIPE_TEST_PUBLISHABLE_KEY: ${{ secrets.STRIPE_TEST_PUBLISHABLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Run suites (continue on failure so we still email)
+        run: npx playwright test
+        continue-on-error: true
+      - name: Send daily alert
+        run: npx tsx scripts/report.ts
+        if: always()
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-results
+          path: results/
+          retention-days: 14

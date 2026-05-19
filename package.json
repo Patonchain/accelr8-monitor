@@ -1,0 +1,25 @@
+{
+  "name": "accelr8-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Daily end-to-end + visual-regression suite for the Accelr8 surfaces (website, booking, CRM).",
+  "scripts": {
+    "test": "playwright test",
+    "test:website": "playwright test website.spec.ts",
+    "test:booking": "playwright test booking.spec.ts",
+    "test:crm": "playwright test crm.spec.ts",
+    "report": "tsx scripts/report.ts",
+    "daily": "playwright test || true && tsx scripts/report.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.69.0",
+    "@playwright/test": "1.49.1",
+    "resend": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "tsx": "4.19.2",
+    "typescript": "5.7.3"
+  }
+}
