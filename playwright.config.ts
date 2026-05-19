@@ -4,9 +4,11 @@ export default defineConfig({
   testDir: "./tests",
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  fullyParallel: false,
+  // Run files in parallel + tests within a file in parallel. Vision API
+  // calls dominate wall time, and they're independent across tests.
+  fullyParallel: true,
   retries: 1,
-  workers: 1,
+  workers: 3,
   reporter: [
     ["list"],
     ["json", { outputFile: "results/results.json" }],
