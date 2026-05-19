@@ -50,9 +50,12 @@ export async function snapViewports(
 
   while (y < docHeight && idx < maxViewports) {
     await page.evaluate((scrollY) => window.scrollTo(0, scrollY), y)
-    // Animations + lazy mounts need a beat. 600ms is enough for IO-triggered
-    // reveals in practice; longer would slow the suite without payoff.
-    await page.waitForTimeout(600)
+    // joinaccelr8.com runs per-section unscramble animations on
+    // intersection-observer trigger. Each new viewport reveals new
+    // sections, each of which starts a fresh ~1.2s unscramble effect.
+    // 1500ms covers the typical animation length; vision was catching
+    // mid-scramble text below the fold without this.
+    await page.waitForTimeout(1500)
 
     const shot = path.join(dir, `${name}-vp${String(idx).padStart(2, "0")}.jpg`)
     await page.screenshot({ path: shot, fullPage: false, type: "jpeg", quality: 75 })
