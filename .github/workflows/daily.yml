@@ -24,6 +24,8 @@ jobs:
       STRIPE_TEST_PUBLISHABLE_KEY: ${{ secrets.STRIPE_TEST_PUBLISHABLE_KEY }}
       BOOKING_SLUG: ${{ secrets.BOOKING_SLUG }}
       COMPLETE_STRIPE_CHECKOUT: ${{ secrets.COMPLETE_STRIPE_CHECKOUT }}
+      SUPABASE_URL: https://aytktpmqghhmhutawjtm.supabase.co
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
