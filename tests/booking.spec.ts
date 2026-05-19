@@ -114,30 +114,52 @@ async function runRoomFlow(page: Page, _context: import("@playwright/test").Brow
     const card = page.locator(`text="${roomName}"`).first()
     await card.scrollIntoViewIfNeeded()
     await card.click()
-    await page.waitForTimeout(1_000)
 
-    const modalShot = await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-modal.jpg`))
-    const modalVerdict = await visionCheck(modalShot, `book.joinaccelr8.com room modal: ${roomName}`)
-    for (const issue of modalVerdict.issues) visionResults.push({ page: SLUG_URL, severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: modalShot })
+    // Wait for the modal panel to mount before doing anything else.
+    await page.waitForSelector("[role='dialog']", { timeout: 10_000 })
+
+    // Capture the entire modal by scrolling within it. The right-hand
+    // booking panel is the scrollable container; we use the role=dialog
+    // wrapper since it's the stable selector. With the sticky-CTA layout,
+    // viewport 0 already shows the button on desktop, but pricing details
+    // and amenities are still further down — capture them too.
+    const modalShots = await snapViewports(page, SCREENSHOT_DIR, `room-${slugName}-modal`, {
+      containerSelector: "[role='dialog']",
+      maxViewports: 8,
+    })
+    for (let i = 0; i < modalShots.length; i++) {
+      const verdict = await visionCheck(modalShots[i], `${roomName} modal (viewport ${i + 1} of ${modalShots.length})`)
+      for (const issue of verdict.issues) visionResults.push({
+        page: `${SLUG_URL}#${slugName}-vp${i + 1}`,
+        severity: issue.severity,
+        description: `[${roomName} vp ${i + 1}/${modalShots.length}] ${issue.description}`,
+        screenshot: modalShots[i],
+      })
+    }
+    const modalShot = modalShots[0] ?? (await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-modal.jpg`)))
 
     // The CTA text varies by state (RoomModal.tsx):
     //   "Sold out" | "Loading lease…" | "Set dates to continue" | "Sign lease & reserve"
-    // We want the active state. Match anything starting with "Sign lease" and
-    // require it to be enabled. If we see any other text, flag the state so the
-    // alert email tells Pat WHY this room isn't bookable.
-    const ctaSelector = "button:has-text('Sign lease'), button:has-text('Set dates'), button:has-text('Sold out'), button:has-text('Loading lease')"
-    const cta = page.locator(ctaSelector).first()
-
-    if (!(await cta.count())) {
+    // Wait explicitly for one of them to mount; busy state can stick for
+    // a few seconds while pricing loads.
+    let cta
+    try {
+      await page.waitForSelector(
+        "button:text-matches('(Sign lease|Set dates|Sold out|Loading lease)', 'i')",
+        { timeout: 10_000 },
+      )
+      cta = page.locator("button:text-matches('(Sign lease|Set dates|Sold out|Loading lease)', 'i')").first()
+    } catch {
       visionResults.push({
         page: SLUG_URL,
         severity: "error",
-        description: `[${roomName}] modal opened but no recognizable CTA button found`,
+        description: `[${roomName}] modal opened but no recognizable CTA button mounted within 10s`,
         screenshot: modalShot,
       })
       return
     }
 
+    await cta.scrollIntoViewIfNeeded()
     const ctaText = ((await cta.textContent()) ?? "").trim()
     const isDisabled = await cta.isDisabled()
 
