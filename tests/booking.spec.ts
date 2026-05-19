@@ -138,13 +138,15 @@ async function runRoomFlow(page: Page, _context: import("@playwright/test").Brow
     }
     const modalShot = modalShots[0] ?? (await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-modal.jpg`)))
 
-    // The CTA text varies by state (RoomModal.tsx):
-    //   "Sold out" | "Loading lease…" | "Set dates to continue" | "Sign lease & reserve"
+    // The CTA text varies by state (RoomModal.tsx). On the currently
+    // deployed booking site it reads "Reserve — refundable deposit" in
+    // the happy path; in-flight WIP rewords this to "Sign lease & reserve".
+    // Other states: "Set dates to continue", "Sold out", "Loading lease…".
     // We use getByRole + accessible-name regex which is more robust than
     // text-matches pseudo-class for buttons whose text content may include
     // surrounding whitespace, line breaks, or wrapping spans.
     const dialog = page.locator("[role='dialog']").first()
-    const cta = dialog.getByRole("button", { name: /(sign lease|set dates|sold out|loading lease)/i }).first()
+    const cta = dialog.getByRole("button", { name: /(reserve|sign lease|set dates|sold out|loading lease)/i }).first()
     try {
       await cta.waitFor({ state: "attached", timeout: 10_000 })
     } catch {
