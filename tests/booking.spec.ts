@@ -98,12 +98,12 @@ test("walk every room type through checkout", async ({ page, context }) => {
   }
 })
 
-// Booking flow:
-//   modal → "Sign lease & reserve" → SignWell iframe (lease signing) → Stripe checkout.
-// The monitor verifies the modal opens with a usable CTA per room. Going
-// deeper (actually signing the lease + paying) is intentionally out of
-// scope today — that requires either SignWell test mode or a synthetic
-// lease-skip path, neither of which exist yet.
+// Booking flow (live production):
+//   room card → modal → Reserve CTA → onReserve POSTs /api/checkout →
+//   page redirects to a Stripe Checkout URL.
+// The monitor drives each room to the Stripe Checkout page and stops
+// there — it does NOT submit a card (the booking site runs sk_live, so
+// completing checkout would be a real charge).
 async function runRoomFlow(page: Page, _context: import("@playwright/test").BrowserContext, roomName: string): Promise<void> {
   const slugName = roomName.replace(/[^a-z0-9]/gi, "_").toLowerCase().slice(0, 40)
 
@@ -195,39 +195,42 @@ async function runRoomFlow(page: Page, _context: import("@playwright/test").Brow
       return
     }
 
-    // Click the active "Sign lease & reserve" CTA. SignWell overlay should mount.
+    // Click the CTA. The live flow is: onReserve POSTs /api/checkout and
+    // redirects the page to a Stripe Checkout URL (checkout.stripe.com).
+    // This is the proven production flow — the /lease/sign + SignWell
+    // hand-off is still WIP and not wired into onReserve.
     await cta.click({ timeout: 5_000 }).catch(async (e) => {
       visionResults.push({
         page: SLUG_URL,
         severity: "error",
-        description: `[${roomName}] click failed: ${(e as Error).message.slice(0, 120)}`,
+        description: `[${roomName}] CTA click failed: ${(e as Error).message.slice(0, 120)}`,
         screenshot: modalShot,
       })
       throw e
     })
 
-    // Wait for either the SignWell iframe to mount OR a "Loading lease…"
-    // state to clear. signwell.com is the iframe origin.
-    let signwellOk = false
+    // Reaching Stripe Checkout is the success signal — it proves the modal
+    // CTA, onReserve, and /api/checkout (Stripe session creation) all work.
+    let reachedStripe = false
     try {
-      await page.waitForSelector("iframe[src*='signwell.com'], iframe[title*='SignWell' i]", { timeout: 30_000 })
-      signwellOk = true
+      await page.waitForURL(/checkout\.stripe\.com/, { timeout: 30_000 })
+      reachedStripe = true
     } catch {
-      // iframe didn't appear — capture whatever state we're in.
+      // never left for Stripe — capture whatever state we landed in.
     }
 
     const afterShot = await snap(page, path.join(SCREENSHOT_DIR, `room-${slugName}-after-click.jpg`))
-    if (!signwellOk) {
+    if (!reachedStripe) {
       visionResults.push({
         page: page.url(),
         severity: "error",
-        description: `[${roomName}] SignWell lease iframe did not mount within 30s after clicking "${ctaText}"`,
+        description: `[${roomName}] clicking "${ctaText}" did not reach Stripe Checkout within 30s — landed at ${page.url()}`,
         screenshot: afterShot,
       })
       return
     }
 
-    const verdict = await visionCheck(afterShot, `lease overlay for ${roomName}`)
+    const verdict = await visionCheck(afterShot, `Stripe checkout page for ${roomName}`)
     for (const issue of verdict.issues) visionResults.push({ page: page.url(), severity: issue.severity, description: `[${roomName}] ${issue.description}`, screenshot: afterShot })
   })
 }
