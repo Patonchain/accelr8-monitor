@@ -63,38 +63,26 @@ test("walk every room type through checkout", async ({ page, context }) => {
 
   await page.goto(SLUG_URL, { waitUntil: "networkidle" })
 
-  // Strategy: rooms are rendered as <article> or button-like cards inside the
-  // BookingExperience grid. We pick the cards that contain a price string
-  // ($X,XXX / mo) — that's the most reliable identifier across markup
-  // changes. Returns the visible room names so we can iterate by text.
-  const roomNames = await page.evaluate(() => {
-    const priceRe = /\$\s*\d/
-    const cards = Array.from(document.querySelectorAll("article, [role='button'], button, a")).filter(
-      (el) => priceRe.test(el.textContent ?? ""),
-    )
-    const names = new Set<string>()
-    for (const card of cards) {
-      const heading = card.querySelector("h2, h3, h4, [class*='title']")
-      const name = heading?.textContent?.trim()
-      if (name && name.length > 2 && name.length < 80) names.add(name)
-    }
-    return Array.from(names)
-  })
+  // Every room renders as `<button class="card">` (RoomCard.tsx). We
+  // iterate by INDEX, not by name — two rooms can share a name (there's a
+  // "Queen Room" at both Market and Epik), and a name-keyed Set silently
+  // dropped the duplicate, so the Epik room was never tested. That blind
+  // spot is exactly how the broken Epik modal shipped unnoticed.
+  const roomCount = await page.locator("button.card").count()
 
-  if (roomNames.length === 0) {
-    // Useful diagnostic so the daily email shows the page state.
+  if (roomCount === 0) {
     const shot = await snap(page, path.join(SCREENSHOT_DIR, "no-rooms-found.jpg"))
     visionResults.push({
       page: SLUG_URL,
       severity: "error",
-      description: "Could not identify any room cards on the slug page. Selector heuristic needs an update.",
+      description: "No room cards (button.card) found on the slug page — selector or markup changed.",
       screenshot: shot,
     })
     throw new Error("zero room cards detected on slug page")
   }
 
-  for (const name of roomNames) {
-    await runRoomFlow(page, context, name)
+  for (let i = 0; i < roomCount; i++) {
+    await runRoomFlow(page, context, i)
   }
 })
 
@@ -104,19 +92,23 @@ test("walk every room type through checkout", async ({ page, context }) => {
 // The monitor drives each room to the Stripe Checkout page and stops
 // there — it does NOT submit a card (the booking site runs sk_live, so
 // completing checkout would be a real charge).
-async function runRoomFlow(page: Page, _context: import("@playwright/test").BrowserContext, roomName: string): Promise<void> {
-  const slugName = roomName.replace(/[^a-z0-9]/gi, "_").toLowerCase().slice(0, 40)
-
-  await test.step(`room: ${roomName}`, async () => {
+async function runRoomFlow(page: Page, _context: import("@playwright/test").BrowserContext, roomIndex: number): Promise<void> {
+  await test.step(`room #${roomIndex}`, async () => {
     // Reset to a clean slug page before each room so prior modals/scrolls don't interfere.
     await page.goto(SLUG_URL, { waitUntil: "networkidle" })
 
-    const card = page.locator(`text="${roomName}"`).first()
+    // Address the room by index, not name — names are not unique.
+    const card = page.locator("button.card").nth(roomIndex)
     await card.scrollIntoViewIfNeeded()
     await card.click()
 
     // Wait for the modal panel to mount before doing anything else.
     await page.waitForSelector("[role='dialog']", { timeout: 10_000 })
+
+    // Read the actual room name from the modal heading for labelling.
+    const roomName =
+      ((await page.locator("[role='dialog'] h2").first().textContent().catch(() => null)) ?? `room-${roomIndex}`).trim()
+    const slugName = `${String(roomIndex).padStart(2, "0")}-${roomName.replace(/[^a-z0-9]/gi, "_").toLowerCase()}`.slice(0, 48)
 
     // Capture the entire modal by scrolling within it. The right-hand
     // booking panel is the scrollable container; we use the role=dialog
